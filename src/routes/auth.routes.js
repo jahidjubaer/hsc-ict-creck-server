@@ -6,6 +6,8 @@ import * as c from '../controllers/auth.controller.js';
 
 const router = Router();
 
+const RATE_LIMITED = { error: { code: 'RATE_LIMITED', message: 'অনেকবার চেষ্টা করা হয়েছে, ১৫ মিনিট পরে আবার চেষ্টা করো' } };
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
@@ -14,12 +16,22 @@ const authLimiter = rateLimit({
   // In production the API is reached through the client's /api rewrite, so many students can share one
   // proxy IP; keying by IP + email keeps one student's failed logins from locking out everyone else.
   keyGenerator: (req) => `${ipKeyGenerator(req.ip)}|${String(req.body?.email ?? '').trim().toLowerCase()}`,
-  message: { error: { code: 'RATE_LIMITED', message: 'অনেকবার চেষ্টা করা হয়েছে, ১৫ মিনিট পরে আবার চেষ্টা করো' } },
+  message: RATE_LIMITED,
+});
+
+// Google sign-in carries no email to key by, and its tokens are signed by Google (nothing to guess), so it gets a
+// wide shared limit instead of the per-student one above.
+const googleLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 600,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: RATE_LIMITED,
 });
 
 router.post('/register', authLimiter, validate(c.registerSchema), c.register);
 router.post('/login', authLimiter, validate(c.loginSchema), c.login);
-router.post('/google', authLimiter, validate(c.googleSchema), c.google);
+router.post('/google', googleLimiter, validate(c.googleSchema), c.google);
 router.post('/refresh', c.refresh);
 router.post('/logout', c.logout);
 router.post('/logout-all', auth, c.logoutAll);
