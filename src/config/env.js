@@ -14,6 +14,9 @@ const schema = z.object({
   TRIAL_DAYS: z.coerce.number().default(15),
   GEMINI_API_KEY: z.string().optional().default(''),
   GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
+  // Google sign-in through Firebase Auth: the server only checks Firebase ID tokens (public keys, no service account)
+  FIREBASE_PROJECT_ID: z.string().optional().default(''),
+  FIREBASE_JWKS_URL: z.string().default('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'),
   ANTHROPIC_API_KEY: z.string().optional().default(''),
   AI_GRADER_MODEL: z.string().default('claude-sonnet-5-5'),
   AI_PROVIDER: z.enum(['auto', 'gemini', 'anthropic', 'none']).default('auto'),

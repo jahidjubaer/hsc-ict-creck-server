@@ -27,7 +27,9 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 80 },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    passwordHash: { type: String, required: true, select: false },
+    passwordHash: { type: String, select: false }, // absent for accounts made with Google
+    passwordSet: { type: Boolean, default: true },
+    googleUid: { type: String, unique: true, sparse: true },
     role: { type: String, enum: ['student', 'admin'], default: 'student' },
     phone: { type: String, trim: true },
     college: { type: String, trim: true, maxlength: 120 },
@@ -58,9 +60,11 @@ const userSchema = new mongoose.Schema(
 
 userSchema.methods.setPassword = async function setPassword(plain) {
   this.passwordHash = await bcrypt.hash(plain, 12);
+  this.passwordSet = true;
 };
 
 userSchema.methods.checkPassword = function checkPassword(plain) {
+  if (!this.passwordHash) return Promise.resolve(false);
   return bcrypt.compare(plain, this.passwordHash);
 };
 
@@ -100,6 +104,8 @@ userSchema.methods.toPublic = function toPublic() {
     district: this.district,
     hscYear: this.hscYear,
     avatar: this.avatar,
+    hasPassword: this.passwordSet !== false,
+    google: !!this.googleUid,
     xp: this.xp,
     level: levelInfo(this.xp).level,
     levelInfo: levelInfo(this.xp),

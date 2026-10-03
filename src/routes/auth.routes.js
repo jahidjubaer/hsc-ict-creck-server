@@ -19,6 +19,7 @@ const authLimiter = rateLimit({
 
 router.post('/register', authLimiter, validate(c.registerSchema), c.register);
 router.post('/login', authLimiter, validate(c.loginSchema), c.login);
+router.post('/google', authLimiter, validate(c.googleSchema), c.google);
 router.post('/refresh', c.refresh);
 router.post('/logout', c.logout);
 router.post('/logout-all', auth, c.logoutAll);

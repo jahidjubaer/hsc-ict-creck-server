@@ -10,14 +10,12 @@ import {
   signRefreshToken,
   verifyRefreshToken,
 } from '../utils/tokens.js';
+import { verifyFirebaseToken } from '../services/firebase.js';
 
 export const registerSchema = z.object({
   name: z.string().trim().min(2, 'নাম কমপক্ষে ২ অক্ষরের হতে হবে').max(80),
   email: z.email('সঠিক ইমেইল দাও').trim().toLowerCase(),
   password: z.string().min(8, 'পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে').max(100),
-  college: z.string().trim().max(120).optional(),
-  district: z.string().trim().max(40).optional(),
-  hscYear: z.coerce.number().int().min(2024).max(2035).optional(),
 });
 
 export const loginSchema = z.object({
@@ -27,10 +25,14 @@ export const loginSchema = z.object({
 
 export const updateProfileSchema = z.object({
   name: z.string().trim().min(2).max(80).optional(),
-  phone: z.string().trim().max(20).optional(),
+  phone: z
+    .string()
+    .trim()
+    .regex(/^(\+?88)?01[3-9]\d{8}$|^$/, 'সঠিক মোবাইল নম্বর দাও (01XXXXXXXXX)')
+    .optional(),
   college: z.string().trim().max(120).optional(),
   district: z.string().trim().max(40).optional(),
-  hscYear: z.coerce.number().int().min(2024).max(2035).optional(),
+  hscYear: z.union([z.coerce.number().int().min(2024).max(2035), z.literal('').transform(() => undefined)]).optional(),
   settings: z
     .object({
       dailyGoalMinutes: z.coerce.number().int().min(10).max(300).optional(),
@@ -57,12 +59,48 @@ export async function register(req, res) {
 export async function login(req, res) {
   const { email, password } = req.body;
   const user = await User.findOne({ email }).select('+passwordHash');
+  if (user && !user.passwordHash && user.googleUid) {
+    throw unauthorized('এই অ্যাকাউন্ট Google দিয়ে খোলা — "Google দিয়ে চালিয়ে যাও" চাপো', 'USE_GOOGLE');
+  }
   if (!user || !(await user.checkPassword(password))) {
     throw unauthorized('ইমেইল অথবা পাসওয়ার্ড ভুল', 'INVALID_CREDENTIALS');
   }
   user.lastLoginAt = new Date();
   await user.save();
   sendSession(res, user);
+}
+
+export const googleSchema = z.object({ idToken: z.string().min(20).max(5000) });
+
+/**
+ * "Continue with Google": the client signs in with Firebase and sends the ID token. Finds the account by Google uid,
+ * else links an existing account with the same (Google-verified) email, else creates one with a fresh trial.
+ */
+export async function google(req, res) {
+  const g = await verifyFirebaseToken(req.body.idToken);
+  let user = await User.findOne({ googleUid: g.uid });
+  let created = false;
+  if (!user) {
+    user = await User.findOne({ email: g.email });
+    if (user) {
+      user.googleUid = g.uid;
+      user.avatar ||= g.picture;
+    } else {
+      const name = (g.name || g.email.split('@')[0]).trim().slice(0, 80);
+      user = new User({
+        name: name.length >= 2 ? name : 'শিক্ষার্থী',
+        email: g.email,
+        googleUid: g.uid,
+        avatar: g.picture,
+        passwordSet: false,
+        trialEndsAt: addDays(new Date(), env.TRIAL_DAYS),
+      });
+      created = true;
+    }
+  }
+  user.lastLoginAt = new Date();
+  await user.save();
+  sendSession(res, user, created ? 201 : 200);
 }
 
 export async function refresh(req, res) {
@@ -104,13 +142,15 @@ export async function updateMe(req, res) {
 }
 
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  currentPassword: z.string().optional(), // not needed to set a first password on a Google account
   newPassword: z.string().min(8, 'পাসওয়ার্ড কমপক্ষে ৮ অক্ষরের হতে হবে').max(100),
 });
 
 export async function changePassword(req, res) {
   const user = await User.findById(req.user.id).select('+passwordHash');
-  if (!(await user.checkPassword(req.body.currentPassword))) throw badRequest('বর্তমান পাসওয়ার্ড ভুল', 'WRONG_PASSWORD');
+  if (user.passwordHash && !(await user.checkPassword(req.body.currentPassword ?? ''))) {
+    throw badRequest('বর্তমান পাসওয়ার্ড ভুল', 'WRONG_PASSWORD');
+  }
   await user.setPassword(req.body.newPassword);
   user.tokenVersion += 1;
   await user.save();
