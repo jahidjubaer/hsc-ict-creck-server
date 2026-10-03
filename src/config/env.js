@@ -5,6 +5,7 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(5000),
   MONGODB_URI: z.string().min(1),
+  MONGODB_DB: z.string().default('ict-crack'),
   CLIENT_URL: z.string().default('http://localhost:5180'),
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
