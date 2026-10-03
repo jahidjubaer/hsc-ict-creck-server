@@ -24,7 +24,7 @@ export const checkSchema = z.object({
 /** POST /guest/quiz — questions for a free topic's MCQ quiz or CQ test. */
 export async function start(req, res) {
   const { topicId, part } = req.body;
-  const topic = await Topic.findById(topicId).select('chapter title published isFree').lean();
+  const topic = await Topic.findById(topicId).select('chapter slug title published isFree').populate('chapter', 'slug number').lean();
   if (!topic?.published) throw notFound('টপিকটি পাওয়া যায়নি');
   if (!topic.isFree) throw new AppError(401, 'এই পরীক্ষা দিতে লগইন করো — নতুন অ্যাকাউন্টে ১৫ দিন সব ফ্রি', 'LOGIN_REQUIRED');
 
@@ -39,6 +39,7 @@ export async function start(req, res) {
     token: jwt.sign({ topic: String(topic._id), part, ids }, env.JWT_ACCESS_SECRET, { audience: AUDIENCE, expiresIn: TOKEN_TTL }),
     part,
     title: `${EXAMS[kind].title}: ${topic.title}`,
+    topic: { _id: topic._id, slug: topic.slug, title: topic.title, chapterSlug: topic.chapter?.slug, chapterNumber: topic.chapter?.number },
     mcq: picked.mcq.map((q) => byId.get(String(q._id)).toPublic()),
     cq: picked.cq.map((q) => byId.get(String(q._id)).toPublic()),
   });
