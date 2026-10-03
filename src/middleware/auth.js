@@ -51,12 +51,14 @@ export function requireRole(...roles) {
 export async function optionalAuth(req, _res, next) {
   const header = req.headers.authorization || '';
   if (header.startsWith('Bearer ')) {
+    let payload;
     try {
-      const payload = verifyAccessToken(header.slice(7));
-      req.user = (await User.findById(payload.sub)) || undefined;
+      payload = verifyAccessToken(header.slice(7));
     } catch {
-      /* treat as guest */
+      // A signed-in student whose token expired must refresh, not silently see the guest (locked) view.
+      throw unauthorized('সেশনের মেয়াদ শেষ, আবার লগইন করো', 'TOKEN_EXPIRED');
     }
+    req.user = (await User.findById(payload.sub)) || undefined;
   }
   next();
 }

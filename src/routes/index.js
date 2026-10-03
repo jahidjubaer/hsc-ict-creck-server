@@ -7,6 +7,7 @@ import paymentRoutes from './payment.routes.js';
 import adminRoutes from './admin.routes.js';
 import gamificationRoutes from './gamification.routes.js';
 import planRoutes from './plan.routes.js';
+import guestRoutes from './guest.routes.js';
 import { PLANS } from '../config/plans.js';
 
 const router = Router();
@@ -17,6 +18,7 @@ router.get('/health', (_req, res) => {
 
 router.get('/plans', (_req, res) => res.json({ plans: PLANS }));
 router.use('/auth', authRoutes);
+router.use('/guest', guestRoutes);
 router.use('/exams', examRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/admin', adminRoutes);

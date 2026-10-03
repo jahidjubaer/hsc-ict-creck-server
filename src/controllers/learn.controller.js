@@ -71,6 +71,9 @@ export async function getTopic(req, res) {
   const topic = await Topic.findOne({ chapter: chapter._id, slug: req.params.topicSlug }).lean();
   if (!topic) throw notFound('টপিকটি পাওয়া যায়নি');
   if (!topic.published) throw new AppError(404, 'এই টপিকটি শীঘ্রই আসছে', 'COMING_SOON');
+  if (!topic.isFree && !req.user) {
+    throw new AppError(401, 'এই টপিক পড়তে লগইন করো — নতুন অ্যাকাউন্টে ১৫ দিন সব ফ্রি', 'LOGIN_REQUIRED');
+  }
   if (!topic.isFree && !hasAccess(req.user)) {
     throw new AppError(402, 'এই টপিক পড়তে প্রিমিয়াম প্যাকেজ প্রয়োজন', 'PAYMENT_REQUIRED');
   }
@@ -78,15 +81,21 @@ export async function getTopic(req, res) {
   const siblings = await Topic.find({ chapter: chapter._id }).select('slug title order published').sort({ order: 1 }).lean();
   const idx = siblings.findIndex((s) => String(s._id) === String(topic._id));
 
+  // Guests (free topics only) get the lesson without progress.
+  const user = req.user;
   const [progress, mcqCount, cqCount, cqBest] = await Promise.all([
-    Progress.findOneAndUpdate(
-      { user: req.user._id, topic: topic._id },
-      { $set: { lastSeenAt: new Date() }, $setOnInsert: { chapter: chapter._id } },
-      { upsert: true, returnDocument: 'after' }
-    ).lean(),
+    user
+      ? Progress.findOneAndUpdate(
+          { user: user._id, topic: topic._id },
+          { $set: { lastSeenAt: new Date() }, $setOnInsert: { chapter: chapter._id } },
+          { upsert: true, returnDocument: 'after' }
+        ).lean()
+      : null,
     Question.countDocuments({ active: true, topic: topic._id, type: 'mcq' }),
     Question.countDocuments({ active: true, topic: topic._id, type: 'cq' }),
-    Attempt.findOne({ user: req.user._id, scopeKey: `topic-cq:${topic._id}`, status: 'submitted' }).sort({ 'score.percent': -1 }).select('score.percent').lean(),
+    user
+      ? Attempt.findOne({ user: user._id, scopeKey: `topic-cq:${topic._id}`, status: 'submitted' }).sort({ 'score.percent': -1 }).select('score.percent').lean()
+      : null,
   ]);
 
   res.json({

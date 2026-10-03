@@ -9,7 +9,7 @@ const router = Router();
 // Content
 router.get('/chapters', optionalAuth, learn.listChapters);
 router.get('/chapters/:slug', optionalAuth, learn.getChapter);
-router.get('/chapters/:slug/topics/:topicSlug', auth, learn.getTopic);
+router.get('/chapters/:slug/topics/:topicSlug', optionalAuth, learn.getTopic); // guests: free topics only
 
 // Progress
 router.get('/progress/summary', auth, progress.summary);
