@@ -6,7 +6,7 @@ import { Topic } from '../models/Topic.js';
 import { Chapter } from '../models/Chapter.js';
 import { Progress } from '../models/Progress.js';
 import { Mistake } from '../models/Mistake.js';
-import { EXAMS, MIN_MCQ, SUBMIT_GRACE_SEC, GATING } from '../config/exams.js';
+import { EXAMS, EXAM_KINDS, START_KINDS, SUBMIT_GRACE_SEC, GATING, enoughQuestions } from '../config/exams.js';
 import { aiAvailable } from '../services/ai/index.js';
 import { checkBadges } from '../services/badges.js';
 import { applyDraft, bankFilter, deadlineOf, finalizeAttempt, pickQuestions, rescoreAttempt } from '../services/exam.js';
@@ -19,7 +19,7 @@ const draftShape = {
 };
 
 export const startSchema = z.object({
-  kind: z.enum(['topic', 'chapter', 'full']),
+  kind: z.enum(START_KINDS),
   topicId: objectId.optional(),
   chapterId: objectId.optional(),
 });
@@ -27,11 +27,11 @@ export const draftSchema = z.object(draftShape);
 export const pickSchema = z.object({ picked: z.number().int().min(0).max(3) });
 export const selfMarkSchema = z.object({ scores: z.array(z.number().int().min(0).max(4)).length(4) });
 export const historyQuery = z.object({
-  kind: z.enum(['topic', 'chapter', 'full']).optional(),
+  kind: z.enum(EXAM_KINDS).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
-const bnDigits = (v) => String(v).replace(/d/g, (d) => '০১২৩৪৫৬৭৮৯'[d]);
+const bnDigits = (v) => String(v).replace(/\d/g, (d) =>'০১২৩৪৫৬৭৮৯'[d]);
 const lockedErr = (msg) => new AppError(403, msg, 'TEST_LOCKED');
 const paywall = () => new AppError(402, 'পরীক্ষা দিতে প্রিমিয়াম প্যাকেজ প্রয়োজন', 'PAYMENT_REQUIRED');
 
@@ -136,21 +136,21 @@ export async function start(req, res) {
   let scopeKey;
   let title = template.title;
 
-  if (kind === 'topic') {
+  if (template.level === 'topic') {
     if (!topicId) throw badRequest('টপিক নির্বাচন করো');
     topic = await Topic.findById(topicId).select('chapter title published isFree').lean();
     if (!topic?.published) throw notFound('টপিকটি পাওয়া যায়নি');
     if (!topic.isFree && !access) throw paywall();
     if (GATING.topicQuiz) {
       const p = await Progress.findOne({ user: user._id, topic: topic._id }).select('status').lean();
-      if (p?.status !== 'completed') throw lockedErr('কুইজ দেওয়ার আগে টপিকটি পড়ে "পড়া শেষ" চাপো');
+      if (p?.status !== 'completed') throw lockedErr('পরীক্ষা দেওয়ার আগে টপিকটি পড়ে "পড়া শেষ" চাপো');
     }
     chapter = { _id: topic.chapter };
-    scopeKey = `topic:${topic._id}`;
+    scopeKey = `${kind}:${topic._id}`;
     title = `${template.title}: ${topic.title}`;
   } else {
     if (!access) throw paywall();
-    if (kind === 'chapter') {
+    if (template.level === 'chapter') {
       if (!chapterId) throw badRequest('অধ্যায় নির্বাচন করো');
       chapter = await Chapter.findById(chapterId).select('number title').lean();
       if (!chapter) throw notFound('অধ্যায়টি পাওয়া যায়নি');
@@ -159,10 +159,10 @@ export async function start(req, res) {
         const done = await Progress.countDocuments({ user: user._id, chapter: chapter._id, status: 'completed' });
         if (done < published) throw lockedErr(`অধ্যায় পরীক্ষার আগে সব টপিক শেষ করো (${bnDigits(published - done)}টি বাকি)`);
       }
-      scopeKey = `chapter:${chapter._id}`;
+      scopeKey = `${kind}:${chapter._id}`;
       title = `অধ্যায় ${bnDigits(chapter.number)} — ${template.title}`;
     } else {
-      scopeKey = 'full';
+      scopeKey = kind;
     }
   }
 
@@ -175,7 +175,7 @@ export async function start(req, res) {
   }
 
   const picked = await pickQuestions(kind, { topic, chapter });
-  if (picked.mcq.length < MIN_MCQ[kind]) {
+  if (!enoughQuestions(kind, picked)) {
     throw new AppError(409, 'এই পরীক্ষার জন্য পর্যাপ্ত প্রশ্ন এখনো যোগ করা হয়নি। শীঘ্রই আসছে!', 'NOT_ENOUGH_QUESTIONS');
   }
   const cqDocs = await Question.find({ _id: { $in: picked.cq.map((q) => q._id) } }).select('parts').lean();
@@ -278,7 +278,7 @@ export async function overview(req, res) {
     Topic.aggregate([{ $match: { published: true } }, { $group: { _id: '$chapter', n: { $sum: 1 } } }]),
     Progress.aggregate([{ $match: { user: user._id, status: 'completed' } }, { $group: { _id: '$chapter', n: { $sum: 1 } } }]),
     Attempt.aggregate([
-      { $match: { user: user._id, status: 'submitted', kind: { $in: ['chapter', 'full'] } } },
+      { $match: { user: user._id, status: 'submitted', kind: { $nin: ['topic', 'topic-cq'] } } },
       { $group: { _id: '$scopeKey', best: { $max: '$score.percent' }, attempts: { $sum: 1 } } },
     ]),
     Mistake.countDocuments({ user: user._id, resolved: false }),
@@ -290,7 +290,13 @@ export async function overview(req, res) {
   const totals = mapOf(topicTotals);
   const doneMap = mapOf(done);
   const bestMap = mapOf(bests);
-  const totalMcq = bank.filter((b) => b._id.type === 'mcq').reduce((s, b) => s + b.n, 0);
+  const total = (type) => bank.filter((b) => b._id.type === type).reduce((s, b) => s + b.n, 0);
+  // Status of one test: enough questions in the bank, best score and number of attempts (by scopeKey).
+  const test = (kind, available, scopeKey) => {
+    const t = EXAMS[kind];
+    const b = bestMap.get(scopeKey);
+    return { ready: t.mcq ? available >= t.minMcq : available >= t.minCq, best: b?.best ?? null, attempts: b?.attempts ?? 0 };
+  };
 
   res.json({
     access: user.accessInfo().hasAccess,
@@ -300,20 +306,19 @@ export async function overview(req, res) {
       const published = totals.get(String(c._id))?.n ?? 0;
       const completed = doneMap.get(String(c._id))?.n ?? 0;
       const mcq = count(c._id, 'mcq');
-      const best = bestMap.get(`chapter:${c._id}`);
+      const cq = count(c._id, 'cq');
       return {
         ...c,
         mcqCount: mcq,
-        cqCount: count(c._id, 'cq'),
+        cqCount: cq,
         topicsPublished: published,
         topicsCompleted: completed,
-        ready: mcq >= MIN_MCQ.chapter,
         unlocked: !GATING.chapterTest || (published > 0 && completed >= published),
-        best: best?.best ?? null,
-        attempts: best?.attempts ?? 0,
+        mcqTest: test('chapter-mcq', mcq, `chapter-mcq:${c._id}`),
+        cqTest: test('chapter-cq', cq, `chapter-cq:${c._id}`),
       };
     }),
-    full: { mcqCount: totalMcq, ready: totalMcq >= MIN_MCQ.full, best: bestMap.get('full')?.best ?? null, attempts: bestMap.get('full')?.attempts ?? 0 },
+    full: { mcqCount: total('mcq'), cqCount: total('cq'), mcqTest: test('full', total('mcq'), 'full'), cqTest: test('full-cq', total('cq'), 'full-cq') },
     mistakes,
     recent,
   });

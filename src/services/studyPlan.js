@@ -3,7 +3,7 @@ import { Topic } from '../models/Topic.js';
 import { Progress } from '../models/Progress.js';
 import { Attempt } from '../models/Attempt.js';
 import { StudyPlan } from '../models/StudyPlan.js';
-import { EXAMS } from '../config/exams.js';
+import { EXAMS, CHAPTER_TEST_KINDS } from '../config/exams.js';
 import { CHAPTER_A_PLUS } from '../config/gamification.js';
 import { recordActivity } from './activity.js';
 import { dhakaDay } from '../utils/dates.js';
@@ -13,7 +13,8 @@ const QUIZ_MIN = 10;
 const MISTAKES_MIN = 15;
 const MIN_DAY_LOAD = 30;
 const MODEL_TEST_MIN = EXAMS.full.timeLimitMin;
-const CHAPTER_TEST_MIN = EXAMS.chapter.timeLimitMin;
+const CHAPTER_TEST_MIN = EXAMS['chapter-mcq'].timeLimitMin;
+const CHAPTER_CQ_MIN = EXAMS['chapter-cq'].timeLimitMin;
 const BN = (n) => String(n).replace(/\d/g, (d) => '০১২৩৪৫৬৭৮৯'[d]);
 
 /** 'YYYY-MM-DD' + n days (calendar maths in UTC so DST/timezones never shift the date). */
@@ -35,18 +36,20 @@ export function studyDates(from, examDate, restDay) {
 /** Days kept for revision at the end: ~15% of the study days (2–21), 1 for very short plans. */
 export const revisionDayCount = (n) => (n >= 10 ? Math.min(21, Math.max(2, Math.round(n * 0.15))) : n >= 7 ? 1 : 0);
 
-/** Everything still to learn, in study order: per chapter → read + quiz for each topic, then the chapter test. */
+/** Everything still to learn, in study order: per chapter → read + quiz for each topic, then the chapter MCQ and CQ tests. */
 async function learningQueue(user, order) {
-  const [chapters, topics, done, quizzed, chapterBest] = await Promise.all([
+  const [chapters, topics, done, quizzed, chapterBest, cqTested] = await Promise.all([
     Chapter.find({ published: true }).select('number slug title priority').lean(),
     Topic.find({ published: true }).select('chapter slug title order estMinutes').sort({ order: 1 }).lean(),
     Progress.distinct('topic', { user: user._id, status: 'completed' }),
     Attempt.distinct('topic', { user: user._id, kind: 'topic', status: 'submitted' }),
     Attempt.aggregate([
-      { $match: { user: user._id, kind: 'chapter', status: 'submitted' } },
+      { $match: { user: user._id, kind: { $in: CHAPTER_TEST_KINDS }, status: 'submitted' } },
       { $group: { _id: '$chapter', best: { $max: '$score.percent' } } },
     ]),
+    Attempt.distinct('chapter', { user: user._id, kind: 'chapter-cq', status: 'submitted' }),
   ]);
+  const cqSet = new Set(cqTested.map(String));
   const doneSet = new Set(done.map(String));
   const quizSet = new Set(quizzed.map(String));
   const bestBy = new Map(chapterBest.map((c) => [String(c._id), c.best]));
@@ -61,7 +64,10 @@ async function learningQueue(user, order) {
       if (!quizSet.has(String(t._id))) queue.push({ ...ref, kind: 'quiz', title: `কুইজ: ${t.title}`, minutes: QUIZ_MIN });
     }
     if ((bestBy.get(String(ch._id)) ?? -1) < CHAPTER_A_PLUS) {
-      queue.push({ ...base, kind: 'chapter-test', title: `অধ্যায় ${BN(ch.number)} পরীক্ষা: ${ch.title}`, minutes: CHAPTER_TEST_MIN });
+      queue.push({ ...base, kind: 'chapter-test', title: `অধ্যায় ${BN(ch.number)} MCQ পরীক্ষা: ${ch.title}`, minutes: CHAPTER_TEST_MIN });
+    }
+    if (!cqSet.has(String(ch._id))) {
+      queue.push({ ...base, kind: 'chapter-cq', title: `অধ্যায় ${BN(ch.number)} সৃজনশীল পরীক্ষা: ${ch.title}`, minutes: CHAPTER_CQ_MIN });
     }
   }
   return { queue, chapters: sorted };
@@ -146,13 +152,19 @@ export async function buildDays(user, { examDate, dailyMinutes, restDay, order }
  */
 export async function syncPlan(user, plan) {
   if (!plan) return plan;
-  const [done, quizzed, tested, fullCount] = await Promise.all([
+  const [done, quizzed, tested, cqTested, fullCount] = await Promise.all([
     Progress.distinct('topic', { user: user._id, status: 'completed' }),
     Attempt.distinct('topic', { user: user._id, kind: 'topic', status: 'submitted' }),
-    Attempt.distinct('chapter', { user: user._id, kind: 'chapter', status: 'submitted' }),
+    Attempt.distinct('chapter', { user: user._id, kind: { $in: CHAPTER_TEST_KINDS }, status: 'submitted' }),
+    Attempt.distinct('chapter', { user: user._id, kind: 'chapter-cq', status: 'submitted' }),
     Attempt.countDocuments({ user: user._id, kind: 'full', status: 'submitted', submittedAt: { $gte: plan.createdAt } }),
   ]);
-  const sets = { read: new Set(done.map(String)), quiz: new Set(quizzed.map(String)), 'chapter-test': new Set(tested.map(String)) };
+  const sets = {
+    read: new Set(done.map(String)),
+    quiz: new Set(quizzed.map(String)),
+    'chapter-test': new Set(tested.map(String)),
+    'chapter-cq': new Set(cqTested.map(String)),
+  };
   const now = new Date();
   let changed = false;
   let modelLeft = fullCount; // each model test taken since the plan began ticks the next model-test task
@@ -161,7 +173,7 @@ export async function syncPlan(user, plan) {
     for (const t of day.tasks) {
       let isDone = t.done;
       if (t.kind === 'read' || t.kind === 'quiz') isDone = sets[t.kind].has(String(t.topic));
-      else if (t.kind === 'chapter-test') isDone = sets['chapter-test'].has(String(t.chapter));
+      else if (t.kind === 'chapter-test' || t.kind === 'chapter-cq') isDone = sets[t.kind].has(String(t.chapter));
       else if (t.kind === 'model-test') isDone = modelLeft-- > 0;
       if (isDone !== t.done) {
         t.done = isDone;

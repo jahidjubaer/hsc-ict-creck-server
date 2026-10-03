@@ -13,7 +13,7 @@ const schema = z.object({
   REFRESH_TOKEN_DAYS: z.coerce.number().default(30),
   TRIAL_DAYS: z.coerce.number().default(15),
   GEMINI_API_KEY: z.string().optional().default(''),
-  GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+  GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
   ANTHROPIC_API_KEY: z.string().optional().default(''),
   AI_GRADER_MODEL: z.string().default('claude-sonnet-5-5'),
   AI_PROVIDER: z.enum(['auto', 'gemini', 'anthropic', 'none']).default('auto'),

@@ -44,22 +44,19 @@ export async function bankFilter(extra = {}) {
   return { active: true, ...extra, $or: [{ topic: null }, { topic: { $in: published } }] };
 }
 
-/** Picks questions for a new attempt. */
+/** Picks questions for a new attempt (only the parts this kind of test has). */
 export async function pickQuestions(kind, { topic, chapter }) {
   const t = EXAMS[kind];
-  if (kind === 'topic') {
-    const [mcq, cq] = await Promise.all([
-      Question.find({ active: true, type: 'mcq', topic: topic._id }).select('_id topic').lean(),
-      Question.find({ active: true, type: 'cq', topic: topic._id }).select('_id topic').lean(),
-    ]);
+  const find = (filter, type, n) => (n ? Question.find({ ...filter, type }).select('_id topic chapterNumber').lean() : []);
+  if (t.level === 'topic') {
+    const filter = { active: true, topic: topic._id };
+    const [mcq, cq] = await Promise.all([find(filter, 'mcq', t.mcq), find(filter, 'cq', t.cq)]);
     return { mcq: shuffle(mcq).slice(0, t.mcq), cq: shuffle(cq).slice(0, t.cq) };
   }
-  const filter = await bankFilter(kind === 'chapter' ? { chapter: chapter._id } : {});
-  const [mcq, cq] = await Promise.all([
-    Question.find({ ...filter, type: 'mcq' }).select('_id topic chapterNumber').lean(),
-    t.cq ? Question.find({ ...filter, type: 'cq' }).select('_id topic chapterNumber').lean() : [],
-  ]);
-  const groupOf = kind === 'chapter' ? (q) => q.topic : (q) => q.chapterNumber;
+  const filter = await bankFilter(t.level === 'chapter' ? { chapter: chapter._id } : {});
+  const [mcq, cq] = await Promise.all([find(filter, 'mcq', t.mcq), find(filter, 'cq', t.cq)]);
+  // spread across topics in a chapter test, across chapters in a full-book test
+  const groupOf = t.level === 'chapter' ? (q) => q.topic : (q) => q.chapterNumber;
   return { mcq: spreadSample(mcq, t.mcq, groupOf), cq: spreadSample(cq, t.cq, groupOf) };
 }
 

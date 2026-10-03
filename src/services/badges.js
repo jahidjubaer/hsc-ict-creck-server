@@ -6,6 +6,7 @@ import { Mistake } from '../models/Mistake.js';
 import { DailyActivity } from '../models/DailyActivity.js';
 import { StudyPlan } from '../models/StudyPlan.js';
 import { BADGES, CHAPTER_A_PLUS } from '../config/gamification.js';
+import { CHAPTER_TEST_KINDS } from '../config/exams.js';
 
 /** Every number a badge can depend on (see BADGES[].metric). A handful of small indexed queries. */
 export async function computeStats(user, flags = {}) {
@@ -19,7 +20,7 @@ export async function computeStats(user, flags = {}) {
     // "Perfect" = every MCQ right (the topic quiz's CQ is graded separately and rarely gets full marks).
     Attempt.distinct('scopeKey', { user: uid, status: 'submitted', kind: 'topic', 'score.mcqTotal': { $gt: 0 }, $expr: { $eq: ['$score.mcq', '$score.mcqTotal'] } }),
     Attempt.aggregate([
-      { $match: { user: uid, status: 'submitted', kind: 'chapter' } },
+      { $match: { user: uid, status: 'submitted', kind: { $in: CHAPTER_TEST_KINDS } } },
       { $group: { _id: '$chapter', best: { $max: '$score.percent' } } },
     ]),
     Attempt.findOne({ user: uid, status: 'submitted', kind: 'full' }).sort({ 'score.percent': -1 }).select('score.percent').lean(),

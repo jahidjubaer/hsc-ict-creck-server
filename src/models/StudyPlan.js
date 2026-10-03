@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const { ObjectId } = mongoose.Schema.Types;
 
-export const TASK_KINDS = ['read', 'quiz', 'chapter-test', 'model-test', 'revise', 'mistakes'];
+export const TASK_KINDS = ['read', 'quiz', 'chapter-test', 'chapter-cq', 'model-test', 'revise', 'mistakes'];
 /** Tasks the student ticks by hand; the rest are ticked from real activity (services/studyPlan.js syncPlan). */
 export const MANUAL_KINDS = ['revise', 'mistakes'];
 
